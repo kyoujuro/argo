@@ -159,6 +159,39 @@ status:
 	assert.Equal(t, wfv1.EstimatedDuration(1), woc.wf.Status.Nodes.FindByDisplayName("pod").EstimatedDuration)
 }
 
+func TestDefaultProgress(t *testing.T) {
+	wf := unmarshalWF(`
+metadata:
+  name: my-wf
+  namespace: my-ns
+spec:
+  entrypoint: main
+  templates:
+   - name: main
+     dag:
+       tasks:
+       - name: pod
+         template: pod
+   - name: pod
+     container: 
+       image: my-image
+`)
+	cancel, controller := newController(wf)
+	defer cancel()
+
+	woc := newWorkflowOperationCtx(wf, controller)
+	woc.operate()
+
+	makePodsPhase(woc, apiv1.PodSucceeded)
+	woc = newWorkflowOperationCtx(woc.wf, controller)
+	woc.operate()
+
+	assert.Equal(t, wfv1.NodeSucceeded, woc.wf.Status.Phase)
+	assert.Equal(t, wfv1.Progress("1/1"), woc.wf.Status.Progress)
+	assert.Equal(t, wfv1.Progress("1/1"), woc.wf.Status.Nodes[woc.wf.Name].Progress)
+	assert.Equal(t, wfv1.Progress("1/1"), woc.wf.Status.Nodes.FindByDisplayName("pod").Progress)
+}
+
 var sidecarWithVol = `
 # Verifies sidecars can reference volumeClaimTemplates
 apiVersion: argoproj.io/v1alpha1
@@ -362,8 +395,6 @@ func TestProcessNodesWithRetries(t *testing.T) {
 	assert.NotNil(t, wf)
 	woc := newWorkflowOperationCtx(wf, controller)
 	assert.NotNil(t, woc)
-	_, _, err := woc.loadExecutionSpec()
-	assert.NoError(t, err)
 	// Verify that there are no nodes in the wf status.
 	assert.Zero(t, len(woc.wf.Status.Nodes))
 
@@ -394,7 +425,7 @@ func TestProcessNodesWithRetries(t *testing.T) {
 
 	// Last child is still running. processNodesWithRetries() should return false since
 	// there should be no retries at this point.
-	n, _, err = woc.processNodeRetries(n, retries, &executeTemplateOpts{})
+	n, _, err := woc.processNodeRetries(n, retries, &executeTemplateOpts{})
 	assert.NoError(t, err)
 	assert.Equal(t, n.Phase, wfv1.NodeRunning)
 
@@ -432,8 +463,6 @@ func TestProcessNodesWithRetriesOnErrors(t *testing.T) {
 	assert.NotNil(t, wf)
 	woc := newWorkflowOperationCtx(wf, controller)
 	assert.NotNil(t, woc)
-	_, _, err := woc.loadExecutionSpec()
-	assert.NoError(t, err)
 	// Verify that there are no nodes in the wf status.
 	assert.Zero(t, len(woc.wf.Status.Nodes))
 
@@ -465,7 +494,7 @@ func TestProcessNodesWithRetriesOnErrors(t *testing.T) {
 
 	// Last child is still running. processNodesWithRetries() should return false since
 	// there should be no retries at this point.
-	n, _, err = woc.processNodeRetries(n, retries, &executeTemplateOpts{})
+	n, _, err := woc.processNodeRetries(n, retries, &executeTemplateOpts{})
 	assert.Nil(t, err)
 	assert.Equal(t, n.Phase, wfv1.NodeRunning)
 
@@ -503,8 +532,6 @@ func TestProcessNodesWithRetriesWithBackoff(t *testing.T) {
 	assert.NotNil(t, wf)
 	woc := newWorkflowOperationCtx(wf, controller)
 	assert.NotNil(t, woc)
-	_, _, err := woc.loadExecutionSpec()
-	assert.NoError(t, err)
 	// Verify that there are no nodes in the wf status.
 	assert.Zero(t, len(woc.wf.Status.Nodes))
 
@@ -537,7 +564,7 @@ func TestProcessNodesWithRetriesWithBackoff(t *testing.T) {
 
 	// Last child is still running. processNodesWithRetries() should return false since
 	// there should be no retries at this point.
-	n, _, err = woc.processNodeRetries(n, retries, &executeTemplateOpts{})
+	n, _, err := woc.processNodeRetries(n, retries, &executeTemplateOpts{})
 	assert.Nil(t, err)
 	assert.Equal(t, n.Phase, wfv1.NodeRunning)
 
@@ -653,8 +680,6 @@ func TestProcessNodesNoRetryWithError(t *testing.T) {
 	assert.NotNil(t, wf)
 	woc := newWorkflowOperationCtx(wf, controller)
 	assert.NotNil(t, woc)
-	_, _, err := woc.loadExecutionSpec()
-	assert.NoError(t, err)
 	// Verify that there are no nodes in the wf status.
 	assert.Zero(t, len(woc.wf.Status.Nodes))
 
@@ -686,7 +711,7 @@ func TestProcessNodesNoRetryWithError(t *testing.T) {
 
 	// Last child is still running. processNodesWithRetries() should return false since
 	// there should be no retries at this point.
-	n, _, err = woc.processNodeRetries(n, retries, &executeTemplateOpts{})
+	n, _, err := woc.processNodeRetries(n, retries, &executeTemplateOpts{})
 	assert.Nil(t, err)
 	assert.Equal(t, n.Phase, wfv1.NodeRunning)
 
@@ -837,8 +862,6 @@ func TestBackoffMessage(t *testing.T) {
 	assert.NotNil(t, wf)
 	woc := newWorkflowOperationCtx(wf, controller)
 	assert.NotNil(t, woc)
-	_, _, err := woc.loadExecutionSpec()
-	assert.NoError(t, err)
 	retryNode := woc.wf.GetNodeByName("retry-backoff-s69z6")
 
 	// Simulate backoff of 4 secods
@@ -2038,7 +2061,7 @@ func TestWorkflowSpecParam(t *testing.T) {
 func TestAddGlobalParamToScope(t *testing.T) {
 	woc := newWoc()
 	woc.globalParams = make(map[string]string)
-	testVal := wfv1.Int64OrStringPtr("test-value")
+	testVal := wfv1.AnyStringPtr("test-value")
 	param := wfv1.Parameter{
 		Name:  "test-param",
 		Value: testVal,
@@ -2056,7 +2079,7 @@ func TestAddGlobalParamToScope(t *testing.T) {
 	assert.Equal(t, testVal.String(), woc.globalParams["workflow.outputs.parameters.global-param"])
 
 	// Change the value and verify it is reflected in workflow outputs
-	newValue := wfv1.Int64OrStringPtr("new-value")
+	newValue := wfv1.AnyStringPtr("new-value")
 	param.Value = newValue
 	woc.addParamToGlobalScope(param)
 	assert.Equal(t, 1, len(woc.wf.Status.Outputs.Parameters))
@@ -3009,7 +3032,7 @@ spec:
         path: /tmp/hello_world.txt
 `: {
 			"Normal WorkflowRunning Workflow Running",
-			"Warning WorkflowFailed Failed to load artifact repository configMap: failed to find artifactory ref {,}/artifact-repository#config",
+			"Warning WorkflowFailed failed to find artifactory ref {,}/artifact-repository#config",
 		},
 		// DAG
 		`
@@ -3056,7 +3079,6 @@ spec:
 	} {
 		wf := unmarshalWF(manifest)
 		cancel, controller := newController(wf)
-		defer cancel()
 		t.Run(wf.Name, func(t *testing.T) {
 			woc := newWorkflowOperationCtx(wf, controller)
 			woc.operate()
@@ -3065,6 +3087,7 @@ spec:
 			woc.operate()
 			assert.Equal(t, want, getEvents(controller, len(want)))
 		})
+		cancel()
 	}
 }
 
@@ -3344,6 +3367,88 @@ func TestRetryNodeOutputs(t *testing.T) {
 	assert.Contains(t, scope.scope, "steps.influx.id")
 	assert.Contains(t, scope.scope, "steps.influx.startedAt")
 	assert.Contains(t, scope.scope, "steps.influx.finishedAt")
+}
+
+var workflowWithPVCAndFailingStep = `
+apiVersion: argoproj.io/v1alpha1
+kind: Workflow
+metadata:
+  name: wf-with-pvc
+spec:
+  entrypoint: entrypoint
+  templates:
+  - name: entrypoint
+    steps:
+    - - name: succeed
+        template: succeed
+    - - name: failure
+        template: failure
+  - name: succeed
+    script:
+      args: [success]
+      command: [cowsay]
+      image: docker/whalesay:latest
+      volumeMounts:
+      - mountPath: /data
+        name: data
+  - name: failure
+    script:
+      command: [sh]
+      image: alpine
+      args: [exit, "1"]
+      volumeMounts:
+      - mountPath: /data
+        name: data
+  volumeClaimTemplates:
+  - metadata:
+      name: data
+    spec:
+      accessModes:
+      - ReadWriteOnce
+      resources:
+        requests:
+          storage: 1Gi
+status:
+  nodes:
+    wf-with-pvc:
+      name: wf-with-pvc
+      phase: Failed
+    wf-with-pvc-2390440388:
+      name: wf-with-pvc(0)[0].succeed
+      phase: Succeeded
+    wf-with-pvc-3099954303:
+      name: wf-with-pvc(0)[1].failure
+      phase: Failed
+  persistentVolumeClaims:
+  - name: data
+    persistentVolumeClaim:
+      claimName: wf-with-pvc-data
+`
+
+// This test ensures that the PVCs used in the steps are not deleted when
+// the workflow fails
+func TestDeletePVCDoesNotDeletePVCOnFailedWorkflow(t *testing.T) {
+	assert := assert.New(t)
+
+	wf := unmarshalWF(workflowWithPVCAndFailingStep)
+	cancel, controller := newController(wf)
+	defer cancel()
+
+	woc := newWorkflowOperationCtx(wf, controller)
+
+	assert.Len(woc.wf.Status.PersistentVolumeClaims, 1, "1 PVC before operating")
+
+	woc.operate()
+
+	node1 := woc.wf.GetNodeByName("wf-with-pvc(0)[0].succeed")
+	node2 := woc.wf.GetNodeByName("wf-with-pvc(0)[1].failure")
+
+	// Node 1 Succeeded
+	assert.Equal(node1.Phase, wfv1.NodeSucceeded)
+	// Node 2 Failed
+	assert.Equal(node2.Phase, wfv1.NodeFailed)
+	// Hence, PVCs should stick around
+	assert.Len(woc.wf.Status.PersistentVolumeClaims, 1, "PVCs not deleted")
 }
 
 var containerOutputsResult = `
@@ -4346,7 +4451,7 @@ func TestConfigMapCacheSaveOperate(t *testing.T) {
 	woc := newWorkflowOperationCtx(wf, controller)
 	sampleOutputs := wfv1.Outputs{
 		Parameters: []wfv1.Parameter{
-			{Name: "hello", Value: wfv1.Int64OrStringPtr("foobar")},
+			{Name: "hello", Value: wfv1.AnyStringPtr("foobar")},
 		},
 	}
 
@@ -4399,7 +4504,7 @@ func TestPropagateMaxDurationProcess(t *testing.T) {
 	assert.NotNil(t, wf)
 	woc := newWorkflowOperationCtx(wf, controller)
 	assert.NotNil(t, woc)
-	_, _, err := woc.loadExecutionSpec()
+	err := woc.setExecWorkflow()
 	assert.NoError(t, err)
 	assert.Zero(t, len(woc.wf.Status.Nodes))
 
@@ -4578,115 +4683,107 @@ spec:
 var globalVarsOnExit = `
 apiVersion: argoproj.io/v1alpha1
 kind: Workflow
-metadata:
+metadata: 
   name: hello-world-6gphm-8n22g
   namespace: default
-spec:
-  arguments:
-    parameters:
-    - name: message
-      value: nononono
-  workflowTemplateRef:
+spec: 
+  arguments: 
+    parameters: 
+      - 
+        name: message
+        value: nononono
+  workflowTemplateRef: 
     name: hello-world-6gphm
-status:
-  nodes:
-    hello-world-6gphm-8n22g:
+status: 
+  nodes: 
+    hello-world-6gphm-8n22g: 
       displayName: hello-world-6gphm-8n22g
       finishedAt: "2020-07-14T20:45:28Z"
       hostNodeName: minikube
       id: hello-world-6gphm-8n22g
-      inputs:
-        parameters:
-        - name: message
-          value: nononono
+      inputs: 
+        parameters: 
+          - 
+            name: message
+            value: nononono
       name: hello-world-6gphm-8n22g
-      outputs:
-        artifacts:
-        - archiveLogs: true
-          name: main-logs
-          s3:
-            accessKeySecret:
-              key: accesskey
-              name: my-minio-cred
-            bucket: my-bucket
-            endpoint: minio:9000
-            insecure: true
-            key: hello-world-6gphm-8n22g/hello-world-6gphm-8n22g/main.log
-            secretKeySecret:
-              key: secretkey
-              name: my-minio-cred
+      outputs: 
+        artifacts: 
+          - 
+            archiveLogs: true
+            name: main-logs
+            s3: 
+              accessKeySecret: 
+                key: accesskey
+                name: my-minio-cred
+              bucket: my-bucket
+              endpoint: "minio:9000"
+              insecure: true
+              key: hello-world-6gphm-8n22g/hello-world-6gphm-8n22g/main.log
+              secretKeySecret: 
+                key: secretkey
+                name: my-minio-cred
         exitCode: "0"
       phase: Succeeded
-      resourcesDuration:
+      resourcesDuration: 
         cpu: 2
         memory: 1
       startedAt: "2020-07-14T20:45:25Z"
-      templateRef:
+      templateRef: 
         name: hello-world-6gphm
         template: whalesay
       templateScope: local/hello-world-6gphm-8n22g
       type: Pod
   phase: Running
-  resourcesDuration:
+  resourcesDuration: 
     cpu: 5
     memory: 2
   startedAt: "2020-07-14T20:45:25Z"
-  storedTemplates:
-    namespaced/hello-world-6gphm/whalesay:
+  storedTemplates: 
+    namespaced/hello-world-6gphm/whalesay: 
       arguments: {}
-      container:
-        args:
-        - hello {{inputs.parameters.message}}
-        command:
-        - cowsay
-        image: docker/whalesay:latest
-        name: ""
-        resources: {}
-      inputs:
-        parameters:
-        - name: message
+      container: 
+        args: 
+          - "hello {{inputs.parameters.message}}"
+        command: 
+          - cowsay
+        image: "docker/whalesay:latest"
+      inputs: 
+        parameters: 
+          - 
+            name: message
       metadata: {}
       name: whalesay
       outputs: {}
-  storedWorkflowTemplateSpec:
-    arguments:
-      parameters:
-      - name: message
-        value: default
+  storedWorkflowTemplateSpec: 
+    arguments: 
+      parameters: 
+        - 
+          name: message
+          value: nononono
     entrypoint: whalesay
     onExit: exitContainer
-    templates:
-    - arguments: {}
-      container:
-        args:
-        - hello {{inputs.parameters.message}}
-        command:
-        - cowsay
-        image: docker/whalesay:latest
-        name: ""
-        resources: {}
-      inputs:
-        parameters:
-        - name: message
-      metadata: {}
-      name: whalesay
-      outputs: {}
-    - arguments: {}
-      container:
-        args:
-        - goodbye {{inputs.parameters.message}}
-        command:
-        - cowsay
-        image: docker/whalesay
-        name: ""
-        resources: {}
-      inputs:
-        parameters:
-        - name: message
-      metadata: {}
-      name: exitContainer
-      outputs: {}
-
+    templates: 
+      - name: whalesay
+        container:
+          image: "docker/whalesay:latest"
+          args: 
+            - "hello {{inputs.parameters.message}}"
+          command: 
+            - cowsay
+        inputs: 
+          parameters: 
+            - name: message
+      - name: exitContainer
+        container:
+          image: docker/whalesay
+          args: 
+            - "goodbye {{inputs.parameters.message}}"
+          command: 
+            - cowsay
+        inputs: 
+          parameters: 
+            - name: message
 `
 
 var wftmplGlobalVarsOnExit = `
